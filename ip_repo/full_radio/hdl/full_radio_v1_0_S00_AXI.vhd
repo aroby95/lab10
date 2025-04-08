@@ -129,7 +129,76 @@ COMPONENT dds_compiler_0
     m_axis_data_tdata : OUT STD_LOGIC_VECTOR(31 DOWNTO 0)
   );
     END COMPONENT;
+    
+    COMPONENT dds_compiler_1 IS
+    PORT (
+        aclk : IN STD_LOGIC;
+        aresetn : IN STD_LOGIC;
+        s_axis_phase_tvalid : IN STD_LOGIC;
+        s_axis_phase_tdata : IN STD_LOGIC_VECTOR(31 DOWNTO 0);
+        m_axis_data_tvalid : OUT STD_LOGIC;
+        m_axis_data_tdata : OUT STD_LOGIC_VECTOR(31 DOWNTO 0)
+    );
+    END COMPONENT dds_compiler_1;
+    
+    COMPONENT fir_compiler_0 IS
+    PORT (
+        aclk : IN STD_LOGIC;
+        s_axis_data_tvalid : IN STD_LOGIC;
+        s_axis_data_tready : OUT STD_LOGIC;
+        s_axis_data_tdata : IN STD_LOGIC_VECTOR(31 DOWNTO 0);
+        m_axis_data_tvalid : OUT STD_LOGIC;
+        m_axis_data_tready : IN STD_LOGIC;
+        m_axis_data_tdata : OUT STD_LOGIC_VECTOR(79 DOWNTO 0)
+    );
+    END COMPONENT fir_compiler_0;
+    
+    COMPONENT fir_compiler_1 IS
+    PORT (
+        aclk : IN STD_LOGIC;
+        s_axis_data_tvalid : IN STD_LOGIC;
+        s_axis_data_tready : OUT STD_LOGIC;
+        s_axis_data_tdata : IN STD_LOGIC_VECTOR(79 DOWNTO 0);
+        m_axis_data_tvalid : OUT STD_LOGIC;
+        m_axis_data_tdata : OUT STD_LOGIC_VECTOR(127 DOWNTO 0)
+    );
+    END COMPONENT fir_compiler_1;
 
+    signal r_count : unsigned(31 downto 0);
+    
+    signal r_freq_shifted_i             : std_logic_vector(31 downto 0);
+    signal r_freq_shifted_i_shifted     : std_logic_vector(31 downto 0);
+    signal r_freq_shifted_i_resized     : std_logic_vector(15 downto 0);
+    
+    signal r_freq_shifted_q             : std_logic_vector(31 downto 0);
+    signal r_freq_shifted_q_shifted     : std_logic_vector(31 downto 0);
+    signal r_freq_shifted_q_resized     : std_logic_vector(15 downto 0);
+    
+    signal r_dds_tuner_output_tdata     : std_logic_vector(31 downto 0);
+    signal r_dds_tuner_output_tvalid    : std_logic;
+    
+    signal r_dds_output                 : std_logic_vector(31 downto 0);
+    signal r_dds_output_tvalid          : std_logic;
+    
+    signal r_filt1_tready               : std_logic;
+    signal r_filt1_tdata                : std_logic_vector(31 downto 0);
+    signal r_filt1_tvalid_out           : std_logic;
+    signal r_filt1_tdata_out            : std_logic_vector(79 downto 0);
+    
+    signal r_filt2_tready               : std_logic;
+    signal r_filt2_tvalid               : std_logic;
+    signal r_filt2_tdata                : std_logic_vector(127 downto 0);
+    
+    signal r_filt_data_raw_i            : std_logic_vector(63 downto 0);
+    signal r_filt_data_raw_q            : std_logic_vector(63 downto 0);
+    signal r_filt_data_shifted_i        : unsigned(63 downto 0);
+    signal r_filt_data_resized_i        : unsigned(15 downto 0);
+    signal r_filt_data_shifted_q        : unsigned(63 downto 0);
+    signal r_filt_data_resized_q        : unsigned(15 downto 0);
+    signal r_filt_data_stdlogic         : std_logic_vector(15 downto 0);
+    signal r_filt_data_stereo           : std_logic_vector(31 downto 0);
+    
+    signal r_rstn                       : std_logic;
 begin
 	-- I/O Connections assignments
 
@@ -367,11 +436,11 @@ begin
 	      when b"00" =>
 	        reg_data_out <= slv_reg0;
 	      when b"01" =>
-	        reg_data_out <= x"DEADBEEF";
+	        reg_data_out <= slv_reg1;
 	      when b"10" =>
 	        reg_data_out <= slv_reg2;
 	      when b"11" =>
-	        reg_data_out <= slv_reg3;
+	        reg_data_out <= std_logic_vector(r_count);
 	      when others =>
 	        reg_data_out  <= (others => '0');
 	    end case;
@@ -397,17 +466,104 @@ begin
 
 
 	-- Add user logic here
+    r_rstn <= not slv_reg2(0);
 
-your_instance_name : dds_compiler_0
-  PORT MAP (
-    aclk => s_axi_aclk,
-    aresetn => '1',
-    s_axis_phase_tvalid => '1',
-    s_axis_phase_tdata => slv_reg0,
-    m_axis_data_tvalid => m_axis_tvalid,
-    m_axis_data_tdata => m_axis_tdata
-  );
+    fake_adc : dds_compiler_0
+    PORT MAP (
+        aclk => s_axi_aclk,
+        aresetn => r_rstn,
+        s_axis_phase_tvalid => '1',
+        s_axis_phase_tdata => slv_reg0,
+        m_axis_data_tvalid => r_dds_output_tvalid,
+        m_axis_data_tdata => r_dds_output
+    );
+  
+    tuner_inst : dds_compiler_1
+    PORT MAP(
+        aclk => s_axi_aclk,
+        aresetn => r_rstn,
+        s_axis_phase_tvalid => '1',
+        s_axis_phase_tdata => slv_reg1,
+        m_axis_data_tvalid => r_dds_tuner_output_tvalid,
+        m_axis_data_tdata => r_dds_tuner_output_tdata
+    );
 
+    -- Simple counter register
+    cnt_inst : process(s_axi_aclk)
+    begin
+        if(rising_edge(s_axi_aclk)) then
+            r_count <= r_count + 1;
+        end if;
+    end process;
+
+    -- Lifted from Lab 8, but added an extra bit shift to hopefully fix distortion
+    freq_shift_proc : process(s_axi_aclk, r_dds_tuner_output_tvalid, r_dds_output_tvalid)
+    begin
+        if(rising_edge(s_axi_aclk)) then
+            if(r_dds_tuner_output_tvalid = '1' and r_dds_output_tvalid = '1') then -- When both DDS outputs are valid we can start the complex multiplies
+                r_freq_shifted_i <= std_logic_vector(unsigned(r_dds_tuner_output_tdata(15 downto 0)) * unsigned(r_dds_output(15 downto 0))); -- 32 bit result
+                r_freq_shifted_i_shifted <= std_logic_vector(shift_right(unsigned(r_freq_shifted_i), 16)); -- Shift to remove the low 16 bits
+                r_freq_shifted_i_resized <= r_freq_shifted_i_shifted(15 downto 0); -- Convert the remaining bits to a 16-bit input to our FIR filter
+                
+                -- Imaginary channel
+                r_freq_shifted_q <= std_logic_vector(unsigned(r_dds_tuner_output_tdata(31 downto 16)) * unsigned(r_dds_output(15 downto 0))); -- 32 bit result
+                r_freq_shifted_q_shifted <= std_logic_vector(shift_right(unsigned(r_freq_shifted_q), 16)); -- Shift to remove the low 16 bits
+                r_freq_shifted_q_resized <= r_freq_shifted_q_shifted(15 downto 0); -- Convert the remaining bits to a 16-bit input to our FIR filter
+            end if;
+        end if;
+    end process;
+    
+    -- Clock out data into the filter once we know it's ready
+    process(s_axi_aclk)
+    begin
+        if(rising_edge(s_axi_aclk)) then
+            if(r_filt1_tready = '1') then
+                r_filt1_tdata <= r_freq_shifted_q_resized & r_freq_shifted_i_resized;
+            end if;
+        end if;
+    end process;
+    
+    first_stage_filt : fir_compiler_0
+    port map(
+        aclk => s_axi_aclk,
+        s_axis_data_tvalid => '1',
+        s_axis_data_tready => r_filt1_tready,
+        s_axis_data_tdata => r_filt1_tdata,
+        m_axis_data_tvalid => r_filt1_tvalid_out,
+        m_axis_data_tready => r_filt2_tready,
+        m_axis_data_tdata => r_filt1_tdata_out
+    );
+    
+    second_stage_filt : fir_compiler_1
+    port map(
+        aclk => s_axi_aclk,
+        s_axis_data_tvalid => r_filt1_tvalid_out,
+        s_axis_data_tready => r_filt2_tready,
+        s_axis_data_tdata => r_filt1_tdata_out,
+        m_axis_data_tvalid => r_filt2_tvalid,
+        m_axis_data_tdata => r_filt2_tdata
+    );
+    
+    -- Pipeline data out of the filter and into the DAC interface
+    filt_data : process(s_axi_aclk, r_filt2_tvalid)
+    begin
+        if(rising_edge(s_axi_aclk)) then
+            if(r_filt2_tvalid = '1') then
+                r_filt_data_raw_q <= r_filt2_tdata(127 downto 64);
+                r_filt_data_raw_i <= r_filt2_tdata(63 downto 0); 
+            
+                r_filt_data_shifted_i <= shift_right(unsigned(r_filt_data_raw_i), 41);
+                r_filt_data_resized_i <= r_filt_data_shifted_i(15 downto 0);
+                
+                r_filt_data_shifted_q <= shift_right(unsigned(r_filt_data_raw_q), 41);
+                r_filt_data_resized_q <= r_filt_data_shifted_q(15 downto 0);
+                
+                r_filt_data_stereo <= std_logic_vector(r_filt_data_resized_q) & std_logic_vector(r_filt_data_resized_i);
+                m_axis_tdata <= r_filt_data_stereo;
+                m_axis_tvalid <= r_filt2_tvalid;           
+            end if;
+        end if;
+    end process;
 
 	-- User logic ends
 
