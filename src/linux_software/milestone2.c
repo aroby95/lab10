@@ -28,13 +28,6 @@ int main()
 {
     // first, get a pointer to the peripheral base address using /dev/mem and the function mmap
     volatile unsigned int *fifo = get_a_pointer(FIFO_PERIPH_ADDRESS);
-    volatile unsigned int *radio_periph = get_a_pointer(RADIO_PERIPH_ADDRESS);	
-
-    *(radio_periph+RADIO_TUNER_CONTROL_REG_OFFSET) = 0; // make sure radio isn't in reset
-    float pinc = (-1.0*30e6)*(float)(1<<27)/125.0e6;
-	*(radio_periph+RADIO_TUNER_TUNER_PINC_OFFSET)=(int)pinc;
-	pinc = 1000*(float)(1<<27)/125.0e6;
-	*(radio_periph+RADIO_TUNER_FAKE_ADC_PINC_OFFSET) = (int)pinc;
 
     printf("Now reading 480,000 words from the FIFO\r\n");
     int words_read = 0;

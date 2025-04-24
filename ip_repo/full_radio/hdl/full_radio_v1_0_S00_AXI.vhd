@@ -559,8 +559,10 @@ begin
                 r_filt_data_resized_q <= r_filt_data_shifted_q(15 downto 0);
                 
                 r_filt_data_stereo <= std_logic_vector(r_filt_data_resized_q) & std_logic_vector(r_filt_data_resized_i);
+                
                 m_axis_tdata <= r_filt_data_stereo;
-                m_axis_tvalid <= r_filt2_tvalid;           
+                
+                m_axis_tvalid <= r_filt2_tvalid and slv_reg2(1);           
             end if;
         end if;
     end process;
